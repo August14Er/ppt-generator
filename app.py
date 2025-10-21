@@ -1,48 +1,40 @@
-# app.py
-from flask import Flask, request, send_file
-#Import "flask" could not be resolvedPylancereportMissingImports)
+from flask import Flask, request, send_file, jsonify
 from pptx import Presentation
-#Import "pptx" could not be resolvedPylancereportMissingImports)
-import tempfile, os, json
+import os
+from io import BytesIO
 
 app = Flask(__name__)
 
 @app.route('/generate', methods=['POST'])
 def generate_ppt():
-    data = request.json
+    data = request.get_json()
+    template_name = data.get("template", "default.pptx")
+    slides = data.get("slides", [])
 
-    # Datos del JSON
-    content = data.get('slides', [])
-    template_name = data.get('template', 'default.pptx')
-
-    # Ruta a plantilla (en la misma carpeta)
-    template_path = os.path.join(os.getcwd(), 'templates', template_name)
-
+    template_path = os.path.join("templates", template_name)
     if not os.path.exists(template_path):
-        return {"error": f"Plantilla {template_name} no encontrada."}, 404
+        return jsonify({"error": f"Plantilla {template_name} no encontrada."}), 404
 
     prs = Presentation(template_path)
+    for slide_data in slides:
+        slide_layout = prs.slide_layouts[1]
+        slide = prs.slides.add_slide(slide_layout)
+        title = slide.shapes.title
+        body = slide.placeholders[1]
+        title.text = slide_data.get("title", "")
+        body.text = slide_data.get("body", "")
 
-    # Rellenar las diapositivas con los datos del documento
-    for slide_data in content:
-        title = slide_data.get('title', '')
-        body = slide_data.get('body', '')
+    output = BytesIO()
+    prs.save(output)
+    output.seek(0)
 
-        slide = prs.slides.add_slide(prs.slide_layouts[1])
-        slide.shapes.title.text = title
-
-        if len(slide.placeholders) > 1:
-            slide.placeholders[1].text = body
-
-    # Guardar temporalmente
-    output_path = tempfile.mktemp(suffix=".pptx")
-    prs.save(output_path)
-
-    return send_file(output_path, as_attachment=True, download_name="presentation.pptx")
+    return send_file(output, as_attachment=True, download_name="generated.pptx")
 
 @app.route('/')
 def home():
-    return {"message": "PPT Generator Flask App is running!"}
+    return "Flask PPT Generator funcionando."
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+    # Render asigna automáticamente un puerto en la variable PORT
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
