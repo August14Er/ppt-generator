@@ -1,3 +1,5 @@
 Flask
 python-pptx
+pdfminer.six
+python-docx
 gunicorn
