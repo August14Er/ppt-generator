@@ -5,6 +5,7 @@ from flask import Flask, request, jsonify, send_file
 from werkzeug.utils import secure_filename
 from pptx import Presentation
 from io import BytesIO
+import json
 
 # text extraction
 from pdfminer.high_level import extract_text as extract_pdf_text
@@ -45,69 +46,69 @@ def extract_text():
             pass
     return jsonify({"text": text})
 
-# ---------- ENDPOINT: generate ----------
+# ---------- ENDPOINT: generate (MODIFICADO) ----------
 @app.route('/generate', methods=['POST'])
 def generate():
-    # Expect JSON with 'template' and 'slides'
-    data = request.get_json(force=True, silent=True)
-    if not data:
-        return jsonify({"error":"Invalid JSON body"}), 400
-    template_name = data.get('template')
-    slides = data.get('slides', [])
-    if not template_name or not isinstance(slides, list):
-        return jsonify({"error":"template and slides required"}), 400
+    # 1. Verificar que tengamos los dos archivos
+    if 'template_file' not in request.files:
+        return jsonify({"error":"No 'template_file' part"}), 400
+    if 'slides_data' not in request.form:
+        return jsonify({"error":"No 'slides_data' part"}), 400
 
-    # Template should be present in folder ./templates/
-    template_path = os.path.join(os.getcwd(), 'templates', template_name)
-    if not os.path.exists(template_path):
-        return jsonify({"error": f"Plantilla {template_name} no encontrada."}), 404
+    template_file = request.files['template_file']
+    slides_data_str = request.form['slides_data']
 
+    # 2. Parsear el JSON con los slides
     try:
-        prs = Presentation(template_path)
-        # Strategy: use layout 1 for content slides, but adapt if not available
+        slides_data = json.loads(slides_data_str)
+        slides = slides_data.get('slides', [])
+        if not isinstance(slides, list):
+             return jsonify({"error":"'slides' debe ser una lista"}), 400
+    except Exception as e:
+        return jsonify({"error":"JSON 'slides_data' malformado","detail": str(e)}), 400
+
+    # 3. Cargar la plantilla desde el archivo subido
+    try:
+        # Usamos BytesIO para leer el archivo en memoria sin guardarlo
+        template_stream = BytesIO(template_file.read())
+        prs = Presentation(template_stream)
+        
+        # (El resto de la lógica para añadir slides es igual que antes)
         layout = None
         if len(prs.slide_layouts) > 1:
             layout = prs.slide_layouts[1]
         else:
             layout = prs.slide_layouts[0]
 
-        # Append slides according to slides list
         for s in slides:
             title = s.get('title', '')
             body = s.get('body', '')
             slide = prs.slides.add_slide(layout)
-            # try fill title
             try:
                 if slide.shapes.title:
                     slide.shapes.title.text = title
-            except Exception:
-                pass
-            # try fill first content placeholder or first text_frame that's not title
+            except Exception: pass
+            
             filled = False
             for shape in slide.shapes:
                 if shape.has_text_frame:
-                    # skip if it is title shape
                     try:
                         if shape is slide.shapes.title:
                             continue
-                    except Exception:
-                        pass
+                    except Exception: pass
                     shape.text_frame.clear()
                     p = shape.text_frame.paragraphs[0]
                     p.text = body
                     filled = True
                     break
-            # if nothing filled, create a textbox
             if not filled:
                 from pptx.util import Inches, Pt
-                left = Inches(1)
-                top = Inches(1.5)
-                width = Inches(8)
-                height = Inches(4.5)
+                left = Inches(1); top = Inches(1.5); width = Inches(8); height = Inches(4.5)
                 txBox = slide.shapes.add_textbox(left, top, width, height)
                 tf = txBox.text_frame
                 tf.text = body
 
+        # 4. Guardar y devolver el PPT final
         out = BytesIO()
         prs.save(out)
         out.seek(0)
@@ -115,8 +116,9 @@ def generate():
                          mimetype='application/vnd.openxmlformats-officedocument.presentationml.presentation',
                          as_attachment=True,
                          download_name='presentation_generated.pptx')
+                         
     except Exception as e:
-        return jsonify({"error":"Generation failed","detail": str(e)}), 500
+        return jsonify({"error":"Fallo en la generación del PPT","detail": str(e)}), 500
 
 # ---------- Root for health check ----------
 @app.route('/')
@@ -127,3 +129,4 @@ if __name__ == '__main__':
     # Render requires using the PORT env var
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
+
